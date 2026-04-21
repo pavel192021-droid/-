@@ -25,6 +25,12 @@ class Group:
     comment: str = ""
     serial_reason: str = ""
     serial_candidates: str = ""
+    full_frame_candidates: str = ""
+    region_candidates: str = ""
+    target_zone_candidates: str = ""
+    globally_rejected_candidates: str = ""
+    registry_matches: str = ""
+    final_decision_reason: str = ""
 
 
 class PhotoSorter:
@@ -68,6 +74,10 @@ class PhotoSorter:
             parts.append(f"{cand.serial}|p={cand.priority}|{cand.source}|{reject}")
         return "; ".join(parts)
 
+    @staticmethod
+    def _join(items: list[str]) -> str:
+        return "; ".join(items[:20])
+
     def _append_log(self, rows: list[dict[str, str]]) -> None:
         write_header = not self.process_log_path.exists()
         fields = [
@@ -82,6 +92,12 @@ class PhotoSorter:
             "статус",
             "причина выбора serial",
             "кандидаты serial",
+            "full_frame_candidates",
+            "region_candidates",
+            "target_zone_candidates",
+            "globally_rejected_candidates",
+            "registry_matches",
+            "final_decision_reason",
             "комментарий / текст ошибки",
         ]
         with self.process_log_path.open("a", encoding="utf-8-sig", newline="") as fh:
@@ -113,7 +129,7 @@ class PhotoSorter:
                 {
                     "дата/время обработки": datetime.now().isoformat(sep=" ", timespec="seconds"),
                     "имя файла": file.name,
-                    "определен ли шильдик": "Да" if group.serial else "Нет",
+                    "определен ли шильдик": "Да" if (group.serial or group.final_decision_reason) else "Нет",
                     "распознанный заводской номер": group.serial or "",
                     "найден ли номер в реестре": "Да" if group.order_number else "Нет",
                     "найденный №заказа": group.order_number or "",
@@ -122,6 +138,12 @@ class PhotoSorter:
                     "статус": status,
                     "причина выбора serial": group.serial_reason,
                     "кандидаты serial": group.serial_candidates,
+                    "full_frame_candidates": group.full_frame_candidates,
+                    "region_candidates": group.region_candidates,
+                    "target_zone_candidates": group.target_zone_candidates,
+                    "globally_rejected_candidates": group.globally_rejected_candidates,
+                    "registry_matches": group.registry_matches,
+                    "final_decision_reason": group.final_decision_reason,
                     "комментарий / текст ошибки": comment,
                 }
             )
@@ -144,32 +166,46 @@ class PhotoSorter:
             self.logger(f"[{idx}/{len(photos)}] OCR: {image_path.name}")
             scan = self.recognizer.scan_file(image_path, registry_serials=registry_serials)
             candidate_view = self._format_candidates(scan.candidates)
-            self.logger(
-                f" -> шильдик={'Да' if scan.is_label else 'Нет'} | кандидаты=[{candidate_view}] | выбран={scan.serial or '-'} | причина={scan.chosen_reason or '-'}"
-            )
 
-            if scan.is_label and scan.serial:
+            self.logger(f"    result_full_frame: {scan.result_full_frame}")
+            self.logger(f"    result_region_scan: {scan.result_region_scan}")
+            self.logger(f"    result_targeted_bottom_right: {scan.result_targeted_bottom_right}")
+            self.logger(f"    chosen_serial: {scan.serial or '-'}")
+            self.logger(f"    chosen_reason: {scan.chosen_reason or '-'}")
+
+            if scan.is_label:
                 if current_group:
                     self._flush_group(current_group, log_rows)
 
-                order_number = self.registry.find_order_by_serial(scan.serial)
-                if not order_number:
-                    destination = self.config.output_dir / "_НЕТ_В_РЕЕСТРЕ"
-                    status = "SERIAL_NOT_IN_REGISTRY"
-                    comment = f"Серийный номер {scan.serial} отсутствует в реестре"
-                else:
-                    obj_result = self.object_finder.find_folder(order_number)
-                    if obj_result.status == "OBJECT_FOLDER_AMBIGUOUS":
-                        destination = self.config.output_dir / "_НЕОДНОЗНАЧНО_ОБЪЕКТ" / order_number
-                        status = obj_result.status
-                        comment = obj_result.comment
+                if scan.serial:
+                    order_number = self.registry.find_order_by_serial(scan.serial)
+                    if not order_number:
+                        destination = self.config.output_dir / "_НЕТ_В_РЕЕСТРЕ"
+                        status = "SERIAL_NOT_IN_REGISTRY"
+                        comment = f"Серийный номер {scan.serial} отсутствует в реестре"
                     else:
-                        destination = self.config.output_dir / obj_result.folder_name
-                        status = "OK" if obj_result.status == "OK" else "OBJECT_FOLDER_NOT_FOUND"
-                        comment = obj_result.comment
+                        obj_result = self.object_finder.find_folder(order_number)
+                        if obj_result.status == "OBJECT_FOLDER_AMBIGUOUS":
+                            destination = self.config.output_dir / "_НЕОДНОЗНАЧНО_ОБЪЕКТ" / order_number
+                            status = obj_result.status
+                            comment = obj_result.comment
+                        else:
+                            destination = self.config.output_dir / obj_result.folder_name
+                            status = "OK" if obj_result.status == "OK" else "OBJECT_FOLDER_NOT_FOUND"
+                            comment = obj_result.comment
 
-                    if self.config.create_serial_subfolder:
-                        destination = destination / scan.serial
+                        if self.config.create_serial_subfolder:
+                            destination = destination / scan.serial
+                else:
+                    order_number = None
+                    if scan.final_decision_reason == "no_registry_match":
+                        destination = self.config.output_dir / "_НЕТ_В_РЕЕСТРЕ"
+                        status = "SERIAL_NOT_IN_REGISTRY"
+                        comment = "Не найден кандидат, присутствующий в Excel-реестре"
+                    else:
+                        destination = self.config.output_dir / "_НЕ_РАСПОЗНАНО"
+                        status = "SERIAL_NOT_RECOGNIZED"
+                        comment = "Шильдик обнаружен, но заводской номер не извлечен"
 
                 current_group = Group(
                     files=[image_path],
@@ -180,6 +216,12 @@ class PhotoSorter:
                     comment=comment,
                     serial_reason=scan.chosen_reason,
                     serial_candidates=candidate_view,
+                    full_frame_candidates=self._join(scan.full_frame_candidates),
+                    region_candidates=self._join(scan.region_candidates),
+                    target_zone_candidates=self._join(scan.target_zone_candidates),
+                    globally_rejected_candidates=self._join(scan.globally_rejected_candidates),
+                    registry_matches=self._join(scan.registry_matches),
+                    final_decision_reason=scan.final_decision_reason,
                 )
                 self.logger(f" -> Шильдик: serial={scan.serial}, status={status}")
                 continue
@@ -206,6 +248,12 @@ class PhotoSorter:
                             "статус": "SKIPPED_BEFORE_FIRST_LABEL",
                             "причина выбора serial": "",
                             "кандидаты serial": "",
+                            "full_frame_candidates": "",
+                            "region_candidates": "",
+                            "target_zone_candidates": "",
+                            "globally_rejected_candidates": "",
+                            "registry_matches": "",
+                            "final_decision_reason": "",
                             "комментарий / текст ошибки": "Пропущено по настройке",
                         }
                     )
