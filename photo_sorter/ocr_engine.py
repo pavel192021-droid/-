@@ -44,6 +44,10 @@ class LabelScanResult:
     result_full_frame: str
     result_region_scan: str
     result_targeted_bottom_right: str
+    result_targeted_label_crop: str
+    target_marker_boxes: list[str]
+    local_label_crop_candidates: list[str]
+    final_target_zone_candidate: str
 
 
 class LabelRecognizer:
@@ -135,31 +139,42 @@ class LabelRecognizer:
         sharp = cv2.filter2D(thr, -1, kernel)
         return cv2.cvtColor(sharp, cv2.COLOR_GRAY2RGB)
 
-    def _targeted_zones(self, img: np.ndarray) -> list[tuple[np.ndarray, str]]:
+    def _targeted_zones(self, img: np.ndarray) -> tuple[list[tuple[np.ndarray, str]], list[str]]:
         h, w = img.shape[:2]
         zones: list[tuple[np.ndarray, str]] = []
+        marker_boxes: list[str] = []
 
+        # Базовые зоны в правом нижнем секторе.
         zones.append((img[h // 2 : h, w // 2 : w], "target_bottom_right_quarter"))
         zones.append((img[(2 * h) // 3 : h, (2 * w) // 3 : w], "target_bottom_right_third"))
 
-        # Поиск зон рядом с маркером "зав"
+        # Поиск маркеров "зав..." преимущественно в нижней правой части.
         try:
             box_results = self._read_text_boxes(img)
             for idx, item in enumerate(box_results[:20]):
                 box, text, _ = item
-                if not self.serial_marker.search(str(text).lower()):
+                text_low = str(text).lower()
+                if not self.serial_marker.search(text_low):
                     continue
                 xs = [int(p[0]) for p in box]
                 ys = [int(p[1]) for p in box]
-                x1, x2 = max(0, min(xs)), min(w, max(xs) + int(0.45 * w))
-                y1, y2 = max(0, min(ys) - int(0.04 * h)), min(h, max(ys) + int(0.12 * h))
+                cx = (min(xs) + max(xs)) / 2
+                cy = (min(ys) + max(ys)) / 2
+                if cx < 0.45 * w or cy < 0.35 * h:
+                    continue
+
+                # Локальный crop вокруг маркера: расширяем вправо и вниз.
+                x1, x2 = max(0, min(xs) - int(0.03 * w)), min(w, max(xs) + int(0.52 * w))
+                y1, y2 = max(0, min(ys) - int(0.03 * h)), min(h, max(ys) + int(0.18 * h))
                 crop = img[y1:y2, x1:x2]
                 if crop.size:
-                    zones.append((crop, f"target_near_marker_{idx}"))
+                    zones.append((crop, f"target_label_crop_{idx}"))
+                    marker_boxes.append(f"{idx}:{text_low[:40]}:x{x1}-{x2}:y{y1}-{y2}")
         except Exception:
             pass
 
-        return [(self._preprocess_for_targeted(c), name) for c, name in zones if c.size]
+        processed = [(self._preprocess_for_targeted(c), name) for c, name in zones if c.size]
+        return processed, marker_boxes
 
     def extract_serial_candidates(self, text_blocks: list[dict[str, str]]) -> list[SerialCandidate]:
         candidates: list[SerialCandidate] = []
@@ -317,7 +332,28 @@ class LabelRecognizer:
         try:
             source = load_rgb_image(image_path)
         except Exception as exc:
-            return LabelScanResult(False, None, 0.0, f"ERROR: {exc}", [], "", [], [], [], [], [], [], "error", "", "", "")
+            return LabelScanResult(
+                False,
+                None,
+                0.0,
+                f"ERROR: {exc}",
+                [],
+                "",
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+                "error",
+                "",
+                "",
+                "",
+                "",
+                [],
+                [],
+                "",
+            )
 
         full_blocks: list[dict[str, str]] = []
         region_blocks: list[dict[str, str]] = []
@@ -348,8 +384,10 @@ class LabelRecognizer:
         prelim_choice, _, _ = self._choose_serial_candidate(full_filtered, registry_serials)
         need_targeted = label_likely or prelim_choice is None
 
+        target_marker_boxes: list[str] = []
         if need_targeted:
-            for zone_img, zone_name in self._targeted_zones(source):
+            target_zones, target_marker_boxes = self._targeted_zones(source)
+            for zone_img, zone_name in target_zones:
                 target_blocks.append({"source": zone_name, "text": self._read_text(zone_img)})
 
         # region OCR (тяжелый) только не в fast_mode
@@ -382,6 +420,13 @@ class LabelRecognizer:
         region_strings = self._candidate_strings(self.extract_serial_candidates(region_blocks))
         target_strings = self._candidate_strings(self.extract_serial_candidates(target_blocks))
 
+        target_candidates_all = self.extract_serial_candidates(target_blocks)
+        target_candidates_filtered, _ = self._apply_global_rejection(target_candidates_all)
+        bottom_right = [c for c in target_candidates_filtered if c.source in {"target_bottom_right_quarter", "target_bottom_right_third"}]
+        local_marker = [c for c in target_candidates_filtered if c.source.startswith("target_label_crop_")]
+        local_label_crop_candidates = self._candidate_strings(local_marker)
+        final_target_zone_candidate = local_marker[0].serial if local_marker else (bottom_right[0].serial if bottom_right else "")
+
         return LabelScanResult(
             is_label=is_label,
             serial=chosen_serial,
@@ -398,5 +443,9 @@ class LabelRecognizer:
             final_decision_reason=final_reason,
             result_full_frame=full_strings[0] if full_strings else "none",
             result_region_scan=region_strings[0] if region_strings else "none",
-            result_targeted_bottom_right=target_strings[0] if target_strings else "none",
+            result_targeted_bottom_right=self._candidate_strings(bottom_right)[0] if bottom_right else "none",
+            result_targeted_label_crop=local_label_crop_candidates[0] if local_label_crop_candidates else "none",
+            target_marker_boxes=target_marker_boxes,
+            local_label_crop_candidates=local_label_crop_candidates,
+            final_target_zone_candidate=final_target_zone_candidate or "none",
         )

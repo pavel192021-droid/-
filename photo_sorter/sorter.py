@@ -30,6 +30,9 @@ class Group:
     target_zone_candidates: str = ""
     globally_rejected_candidates: str = ""
     label_marker_matches: str = ""
+    target_marker_boxes: str = ""
+    local_label_crop_candidates: str = ""
+    final_target_zone_candidate: str = ""
     registry_matches: str = ""
     final_decision_reason: str = ""
 
@@ -98,6 +101,9 @@ class PhotoSorter:
             "target_zone_candidates",
             "globally_rejected_candidates",
             "label_marker_matches",
+            "target_marker_boxes",
+            "local_label_crop_candidates",
+            "final_target_zone_candidate",
             "registry_matches",
             "final_decision_reason",
             "chosen_serial",
@@ -147,6 +153,9 @@ class PhotoSorter:
                     "target_zone_candidates": group.target_zone_candidates,
                     "globally_rejected_candidates": group.globally_rejected_candidates,
                     "label_marker_matches": group.label_marker_matches,
+                    "target_marker_boxes": group.target_marker_boxes,
+                    "local_label_crop_candidates": group.local_label_crop_candidates,
+                    "final_target_zone_candidate": group.final_target_zone_candidate,
                     "registry_matches": group.registry_matches,
                     "final_decision_reason": group.final_decision_reason,
                     "chosen_serial": group.serial or "",
@@ -177,6 +186,7 @@ class PhotoSorter:
             self.logger(f"    result_full_frame: {scan.result_full_frame}")
             self.logger(f"    result_region_scan: {scan.result_region_scan}")
             self.logger(f"    result_targeted_bottom_right: {scan.result_targeted_bottom_right}")
+            self.logger(f"    result_targeted_label_crop: {scan.result_targeted_label_crop}")
             self.logger(f"    chosen_serial: {scan.serial or '-'}")
             self.logger(f"    chosen_reason: {scan.chosen_reason or '-'}")
 
@@ -228,6 +238,9 @@ class PhotoSorter:
                     target_zone_candidates=self._join(scan.target_zone_candidates),
                     globally_rejected_candidates=self._join(scan.globally_rejected_candidates),
                     label_marker_matches=self._join(scan.label_marker_matches),
+                    target_marker_boxes=self._join(scan.target_marker_boxes),
+                    local_label_crop_candidates=self._join(scan.local_label_crop_candidates),
+                    final_target_zone_candidate=scan.final_target_zone_candidate,
                     registry_matches=self._join(scan.registry_matches),
                     final_decision_reason=scan.final_decision_reason,
                 )
@@ -261,6 +274,9 @@ class PhotoSorter:
                             "target_zone_candidates": "",
                             "globally_rejected_candidates": "",
                             "label_marker_matches": "",
+                            "target_marker_boxes": "",
+                            "local_label_crop_candidates": "",
+                            "final_target_zone_candidate": "",
                             "registry_matches": "",
                             "final_decision_reason": "",
                             "chosen_serial": "",
