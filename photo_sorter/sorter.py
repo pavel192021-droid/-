@@ -29,6 +29,7 @@ class Group:
     region_candidates: str = ""
     target_zone_candidates: str = ""
     globally_rejected_candidates: str = ""
+    label_marker_matches: str = ""
     registry_matches: str = ""
     final_decision_reason: str = ""
 
@@ -96,8 +97,11 @@ class PhotoSorter:
             "region_candidates",
             "target_zone_candidates",
             "globally_rejected_candidates",
+            "label_marker_matches",
             "registry_matches",
             "final_decision_reason",
+            "chosen_serial",
+            "chosen_reason",
             "комментарий / текст ошибки",
         ]
         with self.process_log_path.open("a", encoding="utf-8-sig", newline="") as fh:
@@ -142,8 +146,11 @@ class PhotoSorter:
                     "region_candidates": group.region_candidates,
                     "target_zone_candidates": group.target_zone_candidates,
                     "globally_rejected_candidates": group.globally_rejected_candidates,
+                    "label_marker_matches": group.label_marker_matches,
                     "registry_matches": group.registry_matches,
                     "final_decision_reason": group.final_decision_reason,
+                    "chosen_serial": group.serial or "",
+                    "chosen_reason": group.serial_reason,
                     "комментарий / текст ошибки": comment,
                 }
             )
@@ -220,6 +227,7 @@ class PhotoSorter:
                     region_candidates=self._join(scan.region_candidates),
                     target_zone_candidates=self._join(scan.target_zone_candidates),
                     globally_rejected_candidates=self._join(scan.globally_rejected_candidates),
+                    label_marker_matches=self._join(scan.label_marker_matches),
                     registry_matches=self._join(scan.registry_matches),
                     final_decision_reason=scan.final_decision_reason,
                 )
@@ -252,8 +260,11 @@ class PhotoSorter:
                             "region_candidates": "",
                             "target_zone_candidates": "",
                             "globally_rejected_candidates": "",
+                            "label_marker_matches": "",
                             "registry_matches": "",
                             "final_decision_reason": "",
+                            "chosen_serial": "",
+                            "chosen_reason": "",
                             "комментарий / текст ошибки": "Пропущено по настройке",
                         }
                     )

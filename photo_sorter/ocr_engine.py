@@ -38,6 +38,7 @@ class LabelScanResult:
     region_candidates: list[str]
     target_zone_candidates: list[str]
     globally_rejected_candidates: list[str]
+    label_marker_matches: list[str]
     registry_matches: list[str]
     final_decision_reason: str
     result_full_frame: str
@@ -56,6 +57,10 @@ class LabelRecognizer:
         # Поддержка OCR-искажений маркера "зав. №"
         self.serial_marker = re.compile(
             r"((з|3|s)\s*[аa]\s*[вvbб]\.?|завод\.?)\s*(№|n|no|n°|nо)?",
+            re.IGNORECASE,
+        )
+        self.marker_with_number = re.compile(
+            r"((з|3|s)\s*[аa]\s*[вvbб]\.?|завод\.?)\s*(№|n|no|n°|nо)?\s*[:\-]?\s*(\d{6,8})",
             re.IGNORECASE,
         )
         self.serial_number_pattern = re.compile(r"\b\d{6,12}\b")
@@ -115,8 +120,9 @@ class LabelRecognizer:
 
     def _preprocess_for_targeted(self, crop: np.ndarray) -> np.ndarray:
         gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
-        up = cv2.resize(gray, None, fx=2.4, fy=2.4, interpolation=cv2.INTER_CUBIC)
-        contrast = cv2.convertScaleAbs(up, alpha=1.7, beta=8)
+        up = cv2.resize(gray, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_CUBIC)
+        autocontrast = cv2.normalize(up, None, 0, 255, cv2.NORM_MINMAX)
+        contrast = cv2.convertScaleAbs(autocontrast, alpha=1.8, beta=6)
         thr = cv2.adaptiveThreshold(
             contrast,
             255,
@@ -214,12 +220,36 @@ class LabelRecognizer:
                         )
                     )
 
-        # Дедуп: оставляем лучший вариант для каждого serial
+                # Отдельно извлекаем слитный формат: "зав. №00005413", "зав№00005413", "zав No00005413"
+                inline_match = self.marker_with_number.search(near_low)
+                if inline_match:
+                    marker_serial = inline_match.group(4)
+                    candidates.append(
+                        SerialCandidate(
+                            serial=marker_serial,
+                            priority=1300 if is_target else 1200,
+                            source=source,
+                            context=near_text[:220],
+                            reason="marker_inline_number",
+                            rejected_reason=None,
+                            from_marker=True,
+                            from_target_zone=is_target,
+                        )
+                    )
+
+        # Дедуп: оставляем лучший вариант для каждого serial, но сохраняем факт reject, если он был в любой зоне.
         best_by_serial: dict[str, SerialCandidate] = {}
+        rejected_seen: dict[str, str] = {}
         for cand in candidates:
             prev = best_by_serial.get(cand.serial)
             if prev is None or cand.priority > prev.priority:
                 best_by_serial[cand.serial] = cand
+            if cand.rejected_reason and cand.serial not in rejected_seen:
+                rejected_seen[cand.serial] = cand.rejected_reason
+
+        for serial, reason in rejected_seen.items():
+            if serial in best_by_serial:
+                best_by_serial[serial].rejected_reason = reason
 
         return sorted(best_by_serial.values(), key=lambda c: c.priority, reverse=True)
 
@@ -287,7 +317,7 @@ class LabelRecognizer:
         try:
             source = load_rgb_image(image_path)
         except Exception as exc:
-            return LabelScanResult(False, None, 0.0, f"ERROR: {exc}", [], "", [], [], [], [], [], "error", "", "", "")
+            return LabelScanResult(False, None, 0.0, f"ERROR: {exc}", [], "", [], [], [], [], [], [], "error", "", "", "")
 
         full_blocks: list[dict[str, str]] = []
         region_blocks: list[dict[str, str]] = []
@@ -334,6 +364,7 @@ class LabelRecognizer:
         filtered, globally_rejected = self._apply_global_rejection(all_candidates)
 
         chosen, chosen_reason, registry_matches = self._choose_serial_candidate(filtered, registry_serials)
+        label_marker_matches = sorted({c.serial for c in filtered if c.from_marker})
 
         # итоговый статус в strict режиме: если нет совпадений с реестром, serial не выбираем
         if self.config.verify_by_registry and chosen is None:
@@ -362,6 +393,7 @@ class LabelRecognizer:
             region_candidates=region_strings,
             target_zone_candidates=target_strings,
             globally_rejected_candidates=sorted(globally_rejected),
+            label_marker_matches=label_marker_matches,
             registry_matches=sorted(set(registry_matches)),
             final_decision_reason=final_reason,
             result_full_frame=full_strings[0] if full_strings else "none",
